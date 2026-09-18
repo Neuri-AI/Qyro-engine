@@ -16,25 +16,24 @@ class TkinterAdapter(BaseUIFrameworkAdapter):
             return False
 
     def create_application(self, argv: Optional[List[str]] = None) -> Any:
-        import tkinter as tk
         try:
+            import tkinter as tk
             if getattr(tk, "_default_root", None):
                 self._app = getattr(tk, "_default_root")
                 return self._app
         except Exception:
             pass
-
-        if not self._app:
-            try:
-                self._app = tk.Tk()
-            except Exception:
-                # Running in non-display / headless CI
-                self._app = None
-        return self._app
+        return None
 
     def run(self) -> int:
         if not self._app:
-            self.create_application()
+            try:
+                import tkinter as tk
+                self._app = getattr(tk, "_default_root", None)
+                if not self._app:
+                    self._app = tk.Tk()
+            except Exception:
+                self._app = None
         self._is_running = True
         if self._app and hasattr(self._app, "mainloop"):
             self._app.mainloop()
@@ -46,6 +45,12 @@ class TkinterAdapter(BaseUIFrameworkAdapter):
         self._is_running = False
 
     def set_application_icon(self, icon_path: str) -> bool:
+        if not self._app:
+            try:
+                import tkinter as tk
+                self._app = getattr(tk, "_default_root", None)
+            except Exception:
+                pass
         if not self._app:
             return False
         return self.set_window_icon(self._app, icon_path)
@@ -61,6 +66,8 @@ class TkinterAdapter(BaseUIFrameworkAdapter):
             elif hasattr(window, "iconphoto"):
                 photo = tk.PhotoImage(file=icon_path)
                 window.iconphoto(True, photo)
+                # Keep reference on window to prevent Tkinter garbage collection
+                setattr(window, "_qyro_icon_photo", photo)
                 return True
         except Exception:
             pass

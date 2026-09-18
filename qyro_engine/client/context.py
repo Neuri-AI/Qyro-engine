@@ -52,17 +52,47 @@ class ApplicationContext:
         Binds engine container, metadata, and application references to the instance.
         Safe to call multiple times; guarantees _metadata and _container exist.
         """
-        self._ensure_global_engine(
+        ApplicationContext._ensure_global_engine(
             framework=framework,
             custom_root=custom_root,
             enable_sentry=enable_sentry,
             initial_state=initial_state,
             argv=argv,
         )
-        self._container = self._global_container
-        self._boot_info = self._global_boot_info or {}
-        self._app = self._boot_info.get("app_instance")
-        self._metadata = self._boot_info.get("metadata") or AppMetadata.default()
+        container = ApplicationContext._global_container
+        boot_info = ApplicationContext._global_boot_info or {}
+        app_instance = boot_info.get("app_instance")
+
+        # For Tkinter / single-window toolkits, bind self as app if not already established
+        # Note: Check type(self) rather than self to avoid triggering SIP's super-class __init__ check on PyQt
+        if not app_instance:
+            try:
+                if hasattr(type(self), "mainloop"):
+                    app_instance = self
+                    if container and hasattr(container.framework_adapter, "_app"):
+                        container.framework_adapter._app = self
+            except Exception:
+                pass
+
+        self._container = container
+        self._boot_info = boot_info
+        self._app = app_instance
+        self._metadata = boot_info.get("metadata") or AppMetadata.default()
+
+        # Safely assign without evaluating hasattr/getattr on uninitialized SIP objects
+        try:
+            has_title = hasattr(self, "_current_window_title")
+        except (RuntimeError, AttributeError):
+            has_title = False
+        if not has_title:
+            self._current_window_title = None
+
+        try:
+            has_icon = hasattr(self, "_current_icon_path")
+        except (RuntimeError, AttributeError):
+            has_icon = False
+        if not has_icon:
+            self._current_icon_path = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """
@@ -138,10 +168,13 @@ class ApplicationContext:
         )
         instance = super().__new__(cls)
         # Pre-bind engine attributes directly on instance during __new__
+        boot_info = cls._global_boot_info or {}
         instance._container = cls._global_container
-        instance._boot_info = cls._global_boot_info or {}
-        instance._app = instance._boot_info.get("app_instance")
-        instance._metadata = instance._boot_info.get("metadata") or AppMetadata.default()
+        instance._boot_info = boot_info
+        instance._app = boot_info.get("app_instance")
+        instance._metadata = boot_info.get("metadata") or AppMetadata.default()
+        instance._current_window_title = None
+        instance._current_icon_path = None
         return instance
 
     def __init__(
@@ -229,8 +262,8 @@ class ApplicationContext:
         return meta or AppMetadata.default()
 
     @property
-    def build_settings(self) -> Dict[str, Any]:
-        """Raw dictionary of build settings loaded from base.json and platform JSON."""
+    def app_settings(self) -> Dict[str, Any]:
+        """Alias for build settings dictionary (safe against framework method collisions)."""
         return self.metadata.raw_settings if self.metadata else {}
 
     @property
@@ -258,12 +291,13 @@ class ApplicationContext:
     def get_default_window_title(self) -> str:
         """Returns the default window title defined in base.json or metadata."""
         meta_title = self.metadata.app_name if self.metadata else None
-        settings_title = self.build_settings.get("app_name") if self.build_settings else None
+        raw_settings = self.metadata.raw_settings if self.metadata else {}
+        settings_title = raw_settings.get("app_name") if isinstance(raw_settings, dict) else None
         return meta_title or settings_title or "Qyro Application"
 
     def get_window_title(self) -> str:
         """Returns the current window title."""
-        if self._current_window_title:
+        if getattr(self, "_current_window_title", None):
             return self._current_window_title
         if hasattr(self, "windowTitle") and callable(getattr(self, "windowTitle")):
             try:
@@ -330,7 +364,8 @@ class ApplicationContext:
             return self._current_icon_path
 
         # 1. Explicit setting in base.json ("icon": "icons/app.ico" or "app_icon": "...")
-        explicit = self.build_settings.get("icon") or self.build_settings.get("app_icon")
+        raw_settings = self.metadata.raw_settings if self.metadata else {}
+        explicit = (raw_settings.get("icon") or raw_settings.get("app_icon")) if isinstance(raw_settings, dict) else None
         if explicit and self.container:
             segments = [s for s in str(explicit).replace("\\", "/").split("/") if s]
             try:

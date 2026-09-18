@@ -300,8 +300,8 @@ class Component:
         return qyro_engine.get_resource(*segments, required=required)
 
     @property
-    def build_settings(self) -> dict[str, Any]:
-        """Project build settings dictionary."""
+    def app_settings(self) -> dict[str, Any]:
+        """Alias for build settings dictionary (safe against framework method collisions)."""
         import qyro_engine
         return qyro_engine.load_build_settings()
 
@@ -337,30 +337,27 @@ def init_lifecycle(cls: Type[T]) -> Type[T]:
     if not getattr(orig_init, "_qyro_component_wrapped", False):
         def wrapped_init(self: Any, *args: Any, **kwargs: Any) -> None:
             orig_init(self, *args, **kwargs)
-
-            lifecycle = getattr(self, "_mount_component_lifecycle", None)
-
-            if lifecycle:
-                lifecycle()
-                return
-
-            component_lifecycle = (
-                ("component_will_mount", None),
-                ("allow_bg", None),
-                ("render", "render_"),
-                ("component_did_mount", None),
-                ("set_css", "set_CSS"),
-                ("responsive_ui", "responsive_UI"),
-            )
-
-            for primary, fallback in component_lifecycle:
-                method = getattr(self, primary, None)
-
-                if method is None and fallback:
-                    method = getattr(self, fallback, None)
-
-                if method:
-                    method()
+            if hasattr(self, "_mount_component_lifecycle"):
+                self._mount_component_lifecycle()
+            else:
+                if hasattr(self, "component_will_mount"):
+                    self.component_will_mount()
+                if hasattr(self, "allow_bg"):
+                    self.allow_bg()
+                if hasattr(self, "render"):
+                    self.render()
+                elif hasattr(self, "render_"):
+                    self.render_()
+                if hasattr(self, "component_did_mount"):
+                    self.component_did_mount()
+                if hasattr(self, "set_css"):
+                    self.set_css()
+                elif hasattr(self, "set_CSS"):
+                    self.set_CSS()
+                if hasattr(self, "responsive_ui"):
+                    self.responsive_ui()
+                elif hasattr(self, "responsive_UI"):
+                    self.responsive_UI()
 
         wrapped_init._qyro_component_wrapped = True
         cls.__init__ = wrapped_init
