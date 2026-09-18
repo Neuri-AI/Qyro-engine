@@ -4,11 +4,20 @@ Auto-binds Qt UI elements (PySide6, PyQt6, PySide2, PyQt5) to reactive state key
 Eliminates signal/slot boilerplate with two-way data binding.
 """
 
-from typing import Any, Callable, Optional
+import sys
+from typing import Any
 
 
 def _get_qt_widgets():
-    """Dynamically imports QtWidgets from whichever Qt binding is present."""
+    """Dynamically imports QtWidgets, prioritizing the currently active Qt binding in sys.modules."""
+    # Check already loaded bindings in sys.modules first to prevent cross-contamination
+    for pkg in ["PyQt5", "PySide6", "PyQt6", "PySide2"]:
+        if f"{pkg}.QtWidgets" in sys.modules or pkg in sys.modules:
+            try:
+                return __import__(f"{pkg}.QtWidgets", fromlist=["QtWidgets"])
+            except ImportError:
+                pass
+
     for module_name in ["PySide6.QtWidgets", "PyQt6.QtWidgets", "PySide2.QtWidgets", "PyQt5.QtWidgets"]:
         try:
             mod = __import__(module_name, fromlist=["QtWidgets"])

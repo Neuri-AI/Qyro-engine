@@ -40,22 +40,46 @@ class BaseQtAdapter(BaseUIFrameworkAdapter):
             self._app.exit(code)
         self._is_running = False
 
-    def _create_qicon(self, icon_path: str) -> Optional[Any]:
-        """Dynamically imports QIcon from the available Qt binding and returns instance."""
-        for mod_name in ["PySide6.QtGui", "PyQt6.QtGui", "PySide2.QtGui", "PyQt5.QtGui"]:
+    @property
+    def binding_package(self) -> str:
+        """Determines the exact Qt package name associated with this adapter instance."""
+        if self._qapp_class and hasattr(self._qapp_class, "__module__"):
+            return self._qapp_class.__module__.split(".")[0]
+        return self.framework_name
+
+    def _create_qicon(self, icon_path: str, target: Optional[Any] = None) -> Optional[Any]:
+        """
+        Dynamically imports QIcon strictly from the adapter's matching Qt binding.
+        Avoids cross-importing other installed Qt bindings (e.g. PySide6 when running PyQt5),
+        which causes macOS duplicate symbol warnings, QPixmap crashes, and SIGABRT.
+        """
+        pkg = None
+        if target is not None:
+            for cls in getattr(type(target), "__mro__", []):
+                mod = getattr(cls, "__module__", "")
+                if mod:
+                    root = mod.split(".")[0]
+                    if root in ("PyQt5", "PySide6", "PyQt6", "PySide2"):
+                        pkg = root
+                        break
+
+        if not pkg:
+            pkg = self.binding_package
+
+        if pkg:
             try:
-                mod = __import__(mod_name, fromlist=["QIcon"])
+                mod = __import__(f"{pkg}.QtGui", fromlist=["QIcon"])
                 QIcon = getattr(mod, "QIcon", None)
                 if QIcon:
                     return QIcon(icon_path)
-            except ImportError:
-                continue
+            except Exception:
+                pass
         return None
 
     def set_application_icon(self, icon_path: str) -> bool:
         if not self._app:
             return False
-        qicon = self._create_qicon(icon_path)
+        qicon = self._create_qicon(icon_path, target=self._app)
         if qicon and hasattr(self._app, "setWindowIcon"):
             self._app.setWindowIcon(qicon)
             return True
@@ -64,7 +88,7 @@ class BaseQtAdapter(BaseUIFrameworkAdapter):
     def set_window_icon(self, window: Any, icon_path: str) -> bool:
         if not window:
             return False
-        qicon = self._create_qicon(icon_path)
+        qicon = self._create_qicon(icon_path, target=window)
         if qicon and hasattr(window, "setWindowIcon"):
             try:
                 window.setWindowIcon(qicon)

@@ -6,7 +6,7 @@ Provides React-inspired component lifecycle architecture for Qt/PySide and deskt
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Type, TypeVar
+from typing import Any, Optional, Type, TypeVar
 import sys
 
 T = TypeVar("T")
@@ -121,7 +121,24 @@ class Component:
             return
 
         qt_attr = None
-        for mod_name in ("PySide6.QtCore", "PySide2.QtCore", "PyQt6.QtCore", "PyQt5.QtCore"):
+        # Determine the active Qt binding from self's MRO or loaded modules in sys.modules
+        active_pkgs = []
+        for cls in getattr(type(self), "__mro__", []):
+            mod = getattr(cls, "__module__", "")
+            if mod:
+                pkg = mod.split(".")[0]
+                if pkg in ("PyQt5", "PySide6", "PyQt6", "PySide2") and pkg not in active_pkgs:
+                    active_pkgs.append(pkg)
+
+        for pkg in ("PyQt5", "PySide6", "PyQt6", "PySide2"):
+            if (f"{pkg}.QtCore" in sys.modules or pkg in sys.modules) and pkg not in active_pkgs:
+                active_pkgs.append(pkg)
+
+        candidates = [f"{pkg}.QtCore" for pkg in active_pkgs] if active_pkgs else [
+            "PySide6.QtCore", "PyQt6.QtCore", "PySide2.QtCore", "PyQt5.QtCore"
+        ]
+
+        for mod_name in candidates:
             try:
                 mod = __import__(mod_name, fromlist=["Qt"])
                 Qt = getattr(mod, "Qt", None)
@@ -294,6 +311,20 @@ class Component:
         import qyro_engine
         return qyro_engine.is_frozen()
 
+    @property
+    def props(self) -> dict[str, Any]:
+        """
+        Component properties dictionary, similar to React props.
+        Provides a safe default {} if not explicitly passed.
+        """
+        if not hasattr(self, "_props"):
+            self._props = {}
+        return self._props
+
+    @props.setter
+    def props(self, value: dict[str, Any]) -> None:
+        self._props = value
+
 
 def init_lifecycle(cls: Type[T]) -> Type[T]:
     """
@@ -306,27 +337,30 @@ def init_lifecycle(cls: Type[T]) -> Type[T]:
     if not getattr(orig_init, "_qyro_component_wrapped", False):
         def wrapped_init(self: Any, *args: Any, **kwargs: Any) -> None:
             orig_init(self, *args, **kwargs)
-            if hasattr(self, "_mount_component_lifecycle"):
-                self._mount_component_lifecycle()
-            else:
-                if hasattr(self, "component_will_mount"):
-                    self.component_will_mount()
-                if hasattr(self, "allow_bg"):
-                    self.allow_bg()
-                if hasattr(self, "render"):
-                    self.render()
-                elif hasattr(self, "render_"):
-                    self.render_()
-                if hasattr(self, "component_did_mount"):
-                    self.component_did_mount()
-                if hasattr(self, "set_css"):
-                    self.set_css()
-                elif hasattr(self, "set_CSS"):
-                    self.set_CSS()
-                if hasattr(self, "responsive_ui"):
-                    self.responsive_ui()
-                elif hasattr(self, "responsive_UI"):
-                    self.responsive_UI()
+
+            lifecycle = getattr(self, "_mount_component_lifecycle", None)
+
+            if lifecycle:
+                lifecycle()
+                return
+
+            component_lifecycle = (
+                ("component_will_mount", None),
+                ("allow_bg", None),
+                ("render", "render_"),
+                ("component_did_mount", None),
+                ("set_css", "set_CSS"),
+                ("responsive_ui", "responsive_UI"),
+            )
+
+            for primary, fallback in component_lifecycle:
+                method = getattr(self, primary, None)
+
+                if method is None and fallback:
+                    method = getattr(self, fallback, None)
+
+                if method:
+                    method()
 
         wrapped_init._qyro_component_wrapped = True
         cls.__init__ = wrapped_init
